@@ -3,39 +3,35 @@ let faceMesh;
 let handPose;
 let predictions = [];
 let hands = [];
-let earringImages = []; // 儲存 5 種耳環圖片
-let currentEarringIndex = 0; // 預設使用第一對
+let maskImages = []; // 儲存面具圖片
+let currentMaskIndex = 0; // 預設使用第一個面具
 
 function preload() {
-  // 載入 images 目錄下對應手勢的耳環圖片
-  earringImages[0] = loadImage('images/acc1_ring.png');
-  earringImages[1] = loadImage('images/acc2_pearl.png');
-  earringImages[2] = loadImage('images/acc3_tassel.png');
-  earringImages[3] = loadImage('images/acc4_jade.png');
-  earringImages[4] = loadImage('images/acc5_phoenix.png');
+  // 載入 mask 目錄下的面具圖片
+  maskImages[0] = loadImage('images/mask/4379901.png');
+  maskImages[1] = loadImage('images/mask/4379902.png');
 }
 
 function setup() {
   createCanvas(windowWidth, windowHeight);
   // 擷取攝影機影像
   capture = createCapture(VIDEO);
-  capture.size(640, 480);
+  capture.size(640, 480); // 這裡設定偵測用的解析度
   // 隱藏預設產生的 HTML5 video 元件，只在畫布上繪製
   capture.hide();
 
   // 初始化 FaceMesh 模型
-  faceMesh = ml5.faceMesh(capture, modelReady);
+  faceMesh = ml5.faceMesh(capture, { maxFaces: 1, flipped: true }, modelReady);
   // 開始持續偵測臉部
   faceMesh.detectStart(capture, results => {
     predictions = results;
   });
 
   // 初始化 HandPose 模型
-  handPose = ml5.handPose(capture, () => console.log("HandPose Model Ready!"));
-  // 開始持續偵測手部
+  handPose = ml5.handPose(capture, { flipped: true }, () => console.log("HandPose Model Ready!"));
+  // 開始持續偵測手部，當偵測到手時會更新 hands 陣列
   handPose.detectStart(capture, results => {
     hands = results;
-    updateEarringSelection();
   });
 }
 
@@ -73,52 +69,37 @@ function draw() {
   // 設定圖片的繪製模式為中心點
   imageMode(CENTER);
 
-  // 繪製耳垂位置
+  // 偵測手部是否出現在畫面中來切換面具 (揮手到螢幕前)
+  if (hands.length > 0) {
+    currentMaskIndex = 1;
+  } else {
+    currentMaskIndex = 0;
+  }
+
+  // 繪製面具位置
   if (predictions.length > 0) {
     for (let i = 0; i < predictions.length; i++) {
       let keypoints = predictions[i].keypoints;
-      // FaceMesh 索引: 132 為右耳垂區域, 361 為左耳垂區域
-      let earIndices = [132, 361];
-      for (let index of earIndices) {
-        let p = keypoints[index];
-        // 使用更安全的座標對應方式
-        let x = map(p.x, 0, 640, -w / 2, w / 2);
-        let y = map(p.y, 0, 480, -h / 2, h / 2);
-        
-        // 顯示目前根據手勢選中的耳環
-        if (earringImages[currentEarringIndex]) {
-          image(earringImages[currentEarringIndex], x, y, 40, 80); // 調整大小讓耳環更明顯
-        }
+      
+      // 取得臉部關鍵點：168 為鼻樑（中心），10 為頭頂，152 為下巴，234 為右臉邊緣，454 為左臉邊緣
+      let pCenter = keypoints[168];
+      let pTop = keypoints[10];
+      let pBottom = keypoints[152];
+      let pLeft = keypoints[234];
+      let pRight = keypoints[454];
+
+      // 將座標對應到畫布中央 50% 的區域
+      let x = map(pCenter.x, 0, capture.width, -w / 2, w / 2);
+      let y = map(pCenter.y, 0, capture.height, -h / 2, h / 2);
+      
+      // 計算面具應有的寬度與高度（根據臉部特徵點距離動態計算）
+      let faceWidth = dist(pLeft.x, pLeft.y, pRight.x, pRight.y) * (w / capture.width);
+      let faceHeight = dist(pTop.x, pTop.y, pBottom.x, pBottom.y) * (h / capture.height);
+
+      // 顯示目前面具，並根據臉部大小進行縮放（1.6 與 2.0 為覆蓋率調整係數）
+      if (maskImages[currentMaskIndex]) {
+        image(maskImages[currentMaskIndex], x, y, faceWidth * 1.6, faceHeight * 2.0);
       }
-    }
-  }
-  pop();
-}
-
-/**
- * 根據偵測到的手指數量更新 currentEarringIndex
- */
-function updateEarringSelection() {
-  if (hands.length > 0) {
-    let hand = hands[0];
-    let count = 0;
-
-    // 判定食指、中指、無名指、小指是否伸直 (指尖 Y 座標小於第二關節)
-    if (hand.index_finger_tip.y < hand.index_finger_pip.y) count++;
-    if (hand.middle_finger_tip.y < hand.middle_finger_pip.y) count++;
-    if (hand.ring_finger_tip.y < hand.ring_finger_pip.y) count++;
-    if (hand.pinky_finger_tip.y < hand.pinky_finger_pip.y) count++;
-
-    // 判定大拇指 (根據 X 座標判斷是否張開，需考量鏡像)
-    // 這裡使用簡單的距離判定或相對位置
-    if (dist(hand.thumb_tip.x, hand.thumb_tip.y, hand.pinky_finger_mcp.x, hand.pinky_finger_mcp.y) > 
-        dist(hand.thumb_ip.x, hand.thumb_ip.y, hand.pinky_finger_mcp.x, hand.pinky_finger_mcp.y)) {
-      count++;
-    }
-
-    // 如果手指數量在 1-5 之間，更新索引 (1指對應 index 0, 5指對應 index 4)
-    if (count >= 1 && count <= 5) {
-      currentEarringIndex = count - 1;
     }
   }
 }
